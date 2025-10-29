@@ -95,6 +95,10 @@ type MaxmindGeolocation struct {
 	// You can specify the special value "UNK" to match unrecognized ASNs.
 	DenyASN []string `json:"deny_asn"`
 
+	// If true, private IP addresses will always be allowed through the filter.
+	// This includes addresses like 192.168.x.x, 10.x.x.x, 172.16.x.x-172.31.x.x, 127.x.x.x, etc.
+	AllowPrivateIP bool `json:"allow_private_ip"`
+
 	dbInst *maxminddb.Reader
 	logger *zap.Logger
 }
@@ -119,6 +123,8 @@ The matcher configuration will have a single block with the following parameters
 - `allow_asn`: a space-separated list of allowed ASNs
 
 - `deny_asn`: a space-separated list of denied ASNs.
+
+- `allow_private_ip`: if set to true, private IP addresses will always be allowed through the filter.
 
 You will want specify just one of `allow_***` or `deny_ééé`. If you
 specify both of them, denied items will take precedence over allowed ones.
@@ -148,6 +154,8 @@ func (m *MaxmindGeolocation) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				current = 8
 			case "deny_asn":
 				current = 9
+			case "allow_private_ip":
+				current = 10
 			default:
 				switch current {
 				case 1:
@@ -169,6 +177,13 @@ func (m *MaxmindGeolocation) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					m.AllowASN = append(m.AllowASN, d.Val())
 				case 9:
 					m.DenyASN = append(m.DenyASN, d.Val())
+				case 10:
+					val, err := strconv.ParseBool(d.Val())
+					if err != nil {
+						return fmt.Errorf("invalid value for allow_private_ip: %s", d.Val())
+					}
+					m.AllowPrivateIP = val
+					current = 0
 				default:
 					return fmt.Errorf("unexpected config parameter %s", d.Val())
 				}
@@ -273,6 +288,13 @@ func (m *MaxmindGeolocation) Match(r *http.Request) bool {
 		m.logger.Warn("cannot parse IP address", zap.String("address", clientIP))
 		return false
 	}
+
+	// If allow_private_ip is enabled, check if the IP is private
+	if m.AllowPrivateIP && addr.IsPrivate() {
+		m.logger.Debug("Private IP address allowed", zap.String("ip", clientIP))
+		return true
+	}
+
 	var record Record
 	var err error
 
